@@ -30,6 +30,7 @@ import org.jetbrains.mcpserverplugin.general.WaitTool
 import org.jetbrains.mcpserverplugin.git.GetVcsStatusTool
 import org.jetbrains.mcpserverplugin.general.ReformatCurrentFileTool
 import org.jetbrains.mcpserverplugin.general.ReformatFileTool
+import org.jetbrains.mcpserverplugin.general.ListProjectsTool
 
 class McpToolManager {
     companion object {
@@ -76,6 +77,7 @@ class McpToolManager {
             ReformatCurrentFileTool(),
             ReformatFileTool(),
             GetProblemsTools(),
+            ListProjectsTool(),
         )
     }
 }
