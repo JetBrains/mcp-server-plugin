@@ -1,18 +1,15 @@
 package org.jetbrains.ide.mcp
 
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.components.Service.Level.APP
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
-import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.util.io.BufferExposingByteArrayOutputStream
-import io.ktor.client.HttpClient
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
+import io.ktor.client.*
+import io.ktor.client.request.*
+import io.ktor.http.*
 import io.ktor.http.ContentType.*
-import io.ktor.http.contentType
-import io.ktor.util.decodeBase64String
-import io.ktor.util.encodeBase64
+import io.ktor.util.*
 import io.netty.channel.ChannelHandlerContext
 import io.netty.handler.codec.http.FullHttpRequest
 import io.netty.handler.codec.http.HttpMethod
@@ -23,7 +20,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
-import okio.ByteString.Companion.decodeBase64
 import org.jetbrains.ide.RestService
 import org.jetbrains.mcpserverplugin.AbstractMcpTool
 import org.jetbrains.mcpserverplugin.McpTool
@@ -66,12 +62,12 @@ class MCPService : RestService() {
 
     override fun execute(urlDecoder: QueryStringDecoder, request: FullHttpRequest, context: ChannelHandlerContext): String? {
         val path = urlDecoder.path().split(serviceName).last().trimStart('/')
-        val project = getLastFocusedOrOpenedProject() ?: return null
+
         val tools = McpToolManager.Companion.getAllTools()
 
         when (path) {
             "list_tools" -> handleListTools(tools, request, context)
-            else -> handleToolExecution(path, tools, request, context, project)
+            else -> handleToolExecution(path, tools, request, context)
         }
         return null
     }
@@ -96,7 +92,6 @@ class MCPService : RestService() {
         tools: List<AbstractMcpTool<*>>,
         request: FullHttpRequest,
         context: ChannelHandlerContext,
-        project: Project
     ) {
         val tool = tools.find { it.name == path } ?: run {
             sendJson(Response(error = "Unknown tool: $path"), request, context)
@@ -112,7 +107,7 @@ class MCPService : RestService() {
             return
         }
         val result = try {
-            toolHandle(tool, project, args)
+            toolHandle(tool, args)
         } catch (e: Throwable) {
             logger<MCPService>().warn("Failed to execute tool $path", e)
             Response(error = "Failed to execute tool $path, message ${e.message}")
@@ -146,9 +141,9 @@ class MCPService : RestService() {
         }
     }
 
-    private fun <Args : Any> toolHandle(tool: McpTool<Args>, project: Project, args: Any): Response {
+    private fun <Args : Any> toolHandle(tool: McpTool<Args>, args: Any): Response {
         @Suppress("UNCHECKED_CAST")
-        return tool.handle(project, args as Args)
+        return tool.handle(args as Args)
     }
 
     override fun isMethodSupported(method: HttpMethod): Boolean =
@@ -187,6 +182,13 @@ class MCPService : RestService() {
 @Serializable
 object NoArgs
 
+interface ProjectAware {
+    val projectName: String
+}
+
+@Serializable
+data class ProjectOnly(override val projectName: String) : ProjectAware
+
 @Serializable
 data class ToolInfo(
     val name: String,
@@ -210,5 +212,8 @@ data class JsonSchemaObject(
 
 @Serializable
 data class PropertySchema(
-    val type: String
+    val type: String,
 )
+
+
+fun ProjectAware.getProject() = ProjectManager.getInstance().openProjects.find { it.name == projectName }

@@ -1,13 +1,12 @@
 package org.jetbrains.mcpserverplugin
 
-import com.intellij.openapi.project.Project
 import org.jetbrains.ide.mcp.Response
 import kotlin.reflect.KClass
 
 interface McpTool<Args : Any> {
     val name: String
     val description: String
-    fun handle(project: Project, args: Args): Response
+    fun handle(args: Args): Response
 }
 
 abstract class AbstractMcpTool<Args : Any> : McpTool<Args> {
