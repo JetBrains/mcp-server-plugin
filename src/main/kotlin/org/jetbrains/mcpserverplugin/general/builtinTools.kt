@@ -22,7 +22,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.invokeAndWaitIfNeeded
 import com.intellij.openapi.progress.impl.CoreProgressManager
-import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.roots.OrderEnumerator
 import com.intellij.openapi.util.Key
@@ -33,8 +33,11 @@ import com.intellij.usages.UsageViewPresentation
 import com.intellij.util.Processor
 import kotlinx.serialization.Serializable
 import org.jetbrains.ide.mcp.NoArgs
+import org.jetbrains.ide.mcp.ProjectOnly
 import org.jetbrains.ide.mcp.Response
 import org.jetbrains.mcpserverplugin.AbstractMcpTool
+import org.jetbrains.ide.mcp.ProjectAware
+import org.jetbrains.ide.mcp.getProject
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -54,22 +57,25 @@ fun Path.relativizeByProjectDir(projDir: Path?): String =
     projDir?.relativize(this)?.pathString ?: this.absolutePathString()
 
 @Serializable
-data class SearchInFilesArgs(val searchText: String)
+data class SearchInFilesArgs(val searchText: String, override val projectName: String) : ProjectAware
 
 class SearchInFilesContentTool : AbstractMcpTool<SearchInFilesArgs>(SearchInFilesArgs.serializer()) {
     override val name: String = "search_in_files_content"
     override val description: String = """
         Searches for a text substring within all files in the project using IntelliJ's search engine.
         Use this tool to find files containing specific text content.
-        Requires a searchText parameter specifying the text to find.
+        Requires two parameters:
+        - searchText: The text to search for in project files
+        - projectName: The name of the project to search in. Use list_projects tool to get available project names.
         Returns a JSON array of objects containing file information:
         - path: Path relative to project root
         Returns an empty array ([]) if no matches are found.
         Note: Only searches through text files within the project directory.
     """
 
-    override fun handle(project: Project, args: SearchInFilesArgs): Response {
-        val projectDir = project.guessProjectDir()?.toNioPathOrNull()
+    override fun handle(args: SearchInFilesArgs): Response {
+        val project = args.getProject()
+        val projectDir = project?.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "Project directory not found")
 
         val searchSubstring = args.searchText
@@ -107,16 +113,20 @@ class SearchInFilesContentTool : AbstractMcpTool<SearchInFilesArgs>(SearchInFile
     }
 }
 
-class GetRunConfigurationsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+class GetRunConfigurationsTool : org.jetbrains.mcpserverplugin.AbstractMcpTool<ProjectOnly>(ProjectOnly.serializer()) {
     override val name: String
         get() = "get_run_configurations"
-    override val description: String
-        get() = "Returns a list of run configurations for the current project. " +
-                "Use this tool to query the list of available run configurations in current project." +
-                "Then you shall to call \"run_configuration\" tool if you find anything relevant." +
-                "Returns JSON list of run configuration names. Empty list if no run configurations found."
+    override val description: String = """
+        Returns a list of run configurations for the current project.
+        Use this tool to query the list of available run configurations in current project.
+        Requires one parameter:
+        - projectName: The name of the project to get configurations from. Use list_projects tool to get available project names.
+        Then you shall to call "run_configuration" tool if you find anything relevant.
+        Returns JSON list of run configuration names. Empty list if no run configurations found.
+    """
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: ProjectOnly): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val runManager = RunManager.getInstance(project)
 
         val configurations = runManager.allSettings.map { it.name }.joinToString(
@@ -130,20 +140,25 @@ class GetRunConfigurationsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
 }
 
 @Serializable
-data class RunConfigArgs(val configName: String)
+data class RunConfigArgs(val configName: String, override val projectName: String) : ProjectAware
 
 class RunConfigurationTool : AbstractMcpTool<RunConfigArgs>(RunConfigArgs.serializer()) {
     override val name: String = "run_configuration"
-    override val description: String =
-        "Run a specific run configuration in the current project and wait up to 120 seconds for it to finish. " +
-                "Use this tool to run a run configuration that you have found from the \"get_run_configurations\" tool. " +
-                "Returns the output (stdout/stderr) of the execution, prefixed with 'ok\\n' on success (exit code 0). " +
-                "Returns '<error message>' if the configuration is not found, times out, fails to start, or finishes with a non-zero exit code."
+    override val description: String = """
+        Run a specific run configuration in the current project and wait up to 120 seconds for it to finish.
+        Use this tool to run a run configuration that you have found from the "get_run_configurations" tool.
+        Requires two parameters:
+        - configName: The name of the run configuration to execute
+        - projectName: The name of the project containing the run configuration. Use list_projects tool to get available project names.
+        Returns the output (stdout/stderr) of the execution, prefixed with 'ok\n' on success (exit code 0).
+        Returns '<error message>' if the configuration is not found, times out, fails to start, or finishes with a non-zero exit code.
+    """
 
     // Timeout in seconds
     private val executionTimeoutSeconds = 120L
 
-    override fun handle(project: Project, args: RunConfigArgs): Response {
+    override fun handle(args: RunConfigArgs): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val runManager = RunManager.getInstance(project)
         val settings = runManager.allSettings.find { it.name == args.configName }
             ?: return Response(error = "Run configuration with name '${args.configName}' not found.")
@@ -243,24 +258,34 @@ class RunConfigurationTool : AbstractMcpTool<RunConfigArgs>(RunConfigArgs.serial
     }
 }
 
-class GetProjectModulesTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+class GetProjectModulesTool : org.jetbrains.mcpserverplugin.AbstractMcpTool<ProjectOnly>(ProjectOnly.serializer()) {
     override val name: String = "get_project_modules"
-    override val description: String =
-        "Get list of all modules in the project with their dependencies. Returns JSON list of module names."
+    override val description: String = """
+        Get list of all modules in the project with their dependencies.
+        Requires parameter:
+        - projectName: The name of the project to get modules from. Use list_projects tool to get available project names.
+        Returns JSON list of module names.
+    """
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: ProjectOnly): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val moduleManager = com.intellij.openapi.module.ModuleManager.getInstance(project)
         val modules = moduleManager.modules.map { it.name }
         return Response(modules.joinToString(",\n", prefix = "[", postfix = "]"))
     }
 }
 
-class GetProjectDependenciesTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+class GetProjectDependenciesTool : org.jetbrains.mcpserverplugin.AbstractMcpTool<ProjectOnly>(ProjectOnly.serializer()) {
     override val name: String = "get_project_dependencies"
-    override val description: String =
-        "Get list of all dependencies defined in the project. Returns JSON list of dependency names."
+    override val description: String = """
+        Get list of all dependencies defined in the project.
+        Requires parameter:
+        - projectName: The name of the project to get dependencies from. Use list_projects tool to get available project names.
+        Returns JSON list of dependency names.
+    """
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: ProjectOnly): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val moduleManager = com.intellij.openapi.module.ModuleManager.getInstance(project)
         val dependencies = moduleManager.modules.flatMap { module ->
             OrderEnumerator.orderEntries(module).librariesOnly().classes().roots.map { root ->
@@ -272,17 +297,19 @@ class GetProjectDependenciesTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) 
     }
 }
 
-class ListAvailableActionsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+class ListAvailableActionsTool : org.jetbrains.mcpserverplugin.AbstractMcpTool<ProjectOnly>(ProjectOnly.serializer()) {
     override val name: String = "list_available_actions"
     override val description: String = """
         Lists all available actions in JetBrains IDE editor.
+        Requires one parameter:
+        - projectName: The name of the project context. Use list_projects tool to get available project names.
         Returns a JSON array of objects containing action information:
         - id: The action ID
         - text: The action presentation text
         Use this tool to discover available actions for execution with execute_action_by_id.
     """.trimIndent()
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: ProjectOnly): Response {
         val actionManager = ActionManager.getInstance() as ActionManagerEx
         val dataContext = invokeAndWaitIfNeeded {
             DataManager.getInstance().getDataContext()
@@ -321,7 +348,7 @@ class ExecuteActionByIdTool : AbstractMcpTool<ExecuteActionArgs>(ExecuteActionAr
         Note: This tool doesn't wait for the action to complete.
     """.trimIndent()
 
-    override fun handle(project: Project, args: ExecuteActionArgs): Response {
+    override fun handle(args: ExecuteActionArgs): Response {
         val actionManager = ActionManager.getInstance()
         val action = actionManager.getAction(args.actionId)
 
@@ -343,10 +370,12 @@ class ExecuteActionByIdTool : AbstractMcpTool<ExecuteActionArgs>(ExecuteActionAr
     }
 }
 
-class GetProgressIndicatorsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+class GetProgressIndicatorsTool : org.jetbrains.mcpserverplugin.AbstractMcpTool<ProjectOnly>(ProjectOnly.serializer()) {
     override val name: String = "get_progress_indicators"
     override val description: String = """
         Retrieves the status of all running progress indicators in JetBrains IDE editor.
+        Requires one parameter:
+        - projectName: The name of the project context. Use list_projects tool to get available project names.
         Returns a JSON array of objects containing progress information:
         - text: The progress text/description
         - fraction: The progress ratio (0.0 to 1.0)
@@ -354,7 +383,7 @@ class GetProgressIndicatorsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
         Returns an empty array if no progress indicators are running.
     """.trimIndent()
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: ProjectOnly): Response {
         val runningIndicators = CoreProgressManager.getCurrentIndicators()
 
         val progressInfos = runningIndicators.map { indicator ->
@@ -381,7 +410,7 @@ class WaitTool : AbstractMcpTool<WaitArgs>(WaitArgs.serializer()) {
         Use this tool when you need to pause before executing the next command.
     """.trimIndent()
 
-    override fun handle(project: Project, args: WaitArgs): Response {
+    override fun handle(args: WaitArgs): Response {
         val waitTime = if (args.milliseconds <= 0) 5000 else args.milliseconds
 
         try {
@@ -392,5 +421,22 @@ class WaitTool : AbstractMcpTool<WaitArgs>(WaitArgs.serializer()) {
         }
 
         return Response("ok")
+    }
+}
+
+class ListProjectsTool : org.jetbrains.mcpserverplugin.AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+    override val name: String = "list_projects"
+    override val description: String = """
+        Returns a list of all available projects.
+        Use this to get project names for specifying projectName parameter.
+        No parameters required.
+        Returns JSON array of project information objects.
+    """
+
+    override fun handle(args: NoArgs): Response {
+        val projects = ProjectManager.getInstance().openProjects.map { openProject ->
+            """{"name": "${openProject.name}", "baseDir": "${openProject.basePath ?: ""}"}"""
+        }
+        return Response(projects.joinToString(",\n", prefix = "[", postfix = "]"))
     }
 }

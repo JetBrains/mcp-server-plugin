@@ -8,7 +8,7 @@ import kotlin.reflect.KClass
 interface McpTool<Args : Any> {
     val name: String
     val description: String
-    fun handle(project: Project, args: Args): Response
+    fun handle(args: Args): Response
 }
 
 abstract class AbstractMcpTool<Args : Any>(val serializer: KSerializer<Args>) : McpTool<Args> {

@@ -4,7 +4,6 @@ import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManager.getInstance
-import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.toNioPathOrNull
@@ -12,25 +11,33 @@ import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.io.createParentDirectories
 import kotlinx.serialization.Serializable
+import org.jetbrains.ide.RestService.Companion.getLastFocusedOrOpenedProject
 import org.jetbrains.ide.mcp.NoArgs
+import org.jetbrains.ide.mcp.ProjectAware
+import org.jetbrains.ide.mcp.ProjectOnly
 import org.jetbrains.ide.mcp.Response
+import org.jetbrains.ide.mcp.getProject
 import org.jetbrains.mcpserverplugin.AbstractMcpTool
-import org.jetbrains.mcpserverplugin.general.relativizeByProjectDir
-import org.jetbrains.mcpserverplugin.general.resolveRel
 import java.nio.file.Path
 import kotlin.io.path.*
 
 
 @Serializable
-data class ListDirectoryTreeInFolderArgs(val pathInProject: String, val maxDepth: Int = 5)
+data class ListDirectoryTreeInFolderArgs(
+    override val projectName: String,
+    val pathInProject: String,
+    val maxDepth: Int = 5,
+) : ProjectAware
 
 class ListDirectoryTreeInFolderTool : AbstractMcpTool<ListDirectoryTreeInFolderArgs>(ListDirectoryTreeInFolderArgs.serializer()) {
     override val name: String = "list_directory_tree_in_folder"
     override val description: String = """
         Provides a hierarchical tree view of the project directory structure starting from the specified folder.
         Use this tool to efficiently explore complex project structures in a nested format.
-        Requires a pathInProject parameter (use "/" for project root).
-        Optionally accepts a maxDepth parameter (default: 5) to limit recursion depth.
+        Requires three parameters:
+        - pathInProject: Path to the folder to list (use "/" for project root)
+        - maxDepth: Maximum recursion depth (default: 5)
+        - projectName: The name of the project to explore. Use list_projects tool to get available project names.
         Returns a JSON-formatted tree structure, where each entry contains:
         - name: The name of the file or directory
         - type: Either "file" or "directory"
@@ -39,8 +46,9 @@ class ListDirectoryTreeInFolderTool : AbstractMcpTool<ListDirectoryTreeInFolderA
         Returns error if the specified path doesn't exist or is outside project scope.
     """.trimIndent()
 
-    override fun handle(project: Project, args: ListDirectoryTreeInFolderArgs): Response {
-        val projectDir = project.guessProjectDir()?.toNioPathOrNull()
+    override fun handle(args: ListDirectoryTreeInFolderArgs): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
+        val projectDir = args.getProject()?.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "can't find project dir")
 
         return runReadAction {
@@ -101,14 +109,16 @@ class ListDirectoryTreeInFolderTool : AbstractMcpTool<ListDirectoryTreeInFolderA
 
 
 @Serializable
-data class ListFilesInFolderArgs(val pathInProject: String)
+data class ListFilesInFolderArgs(val pathInProject: String, override val projectName: String) : ProjectAware
 
 class ListFilesInFolderTool : AbstractMcpTool<ListFilesInFolderArgs>(ListFilesInFolderArgs.serializer()) {
     override val name: String = "list_files_in_folder"
     override val description: String = """
         Lists all files and directories in the specified project folder.
         Use this tool to explore project structure and get contents of any directory.
-        Requires a pathInProject parameter (use "/" for project root).
+        Requires two parameters:
+        - pathInProject: Path to the folder to list (use "/" for project root)
+        - projectName: The name of the project to explore. Use list_projects tool to get available project names.
         Returns a JSON-formatted list of entries, where each entry contains:
         - name: The name of the file or directory
         - type: Either "file" or "directory"
@@ -116,8 +126,8 @@ class ListFilesInFolderTool : AbstractMcpTool<ListFilesInFolderArgs>(ListFilesIn
         Returns error if the specified path doesn't exist or is outside project scope.
     """.trimIndent()
 
-    override fun handle(project: Project, args: ListFilesInFolderArgs): Response {
-        val projectDir = project.guessProjectDir()?.toNioPathOrNull()
+    override fun handle(args: ListFilesInFolderArgs): Response {
+        val projectDir = args.getProject()?.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "can't find project dir")
 
         return runReadAction {
@@ -144,14 +154,16 @@ class ListFilesInFolderTool : AbstractMcpTool<ListFilesInFolderArgs>(ListFilesIn
 
 
 @Serializable
-data class Query(val nameSubstring: String)
+data class Query(val nameSubstring: String, override val projectName: String) : ProjectAware
 
 class FindFilesByNameSubstring : AbstractMcpTool<Query>(Query.serializer()) {
     override val name: String = "find_files_by_name_substring"
     override val description: String = """
         Searches for all files in the project whose names contain the specified substring (case-insensitive).
         Use this tool to locate files when you know part of the filename.
-        Requires a nameSubstring parameter for the search term.
+        Requires two parameters:
+        - nameSubstring: The search term to find in filenames
+        - projectName: The name of the project to search in. Use list_projects tool to get available project names.
         Returns a JSON array of objects containing file information:
         - path: Path relative to project root
         - name: File name
@@ -159,7 +171,8 @@ class FindFilesByNameSubstring : AbstractMcpTool<Query>(Query.serializer()) {
         Note: Only searches through files within the project directory, excluding libraries and external dependencies.
     """
 
-    override fun handle(project: Project, args: Query): Response {
+    override fun handle(args: Query): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "project dir not found")
 
@@ -191,23 +204,25 @@ class FindFilesByNameSubstring : AbstractMcpTool<Query>(Query.serializer()) {
 
 
 @Serializable
-data class CreateNewFileWithTextArgs(val pathInProject: String, val text: String)
+data class CreateNewFileWithTextArgs(val pathInProject: String, val text: String, override val projectName: String) : ProjectAware
 
 class CreateNewFileWithTextTool : AbstractMcpTool<CreateNewFileWithTextArgs>(CreateNewFileWithTextArgs.serializer()) {
     override val name: String = "create_new_file_with_text"
     override val description: String = """
         Creates a new file at the specified path within the project directory and populates it with the provided text.
         Use this tool to generate new files in your project structure.
-        Requires two parameters:
-            - pathInProject: The relative path where the file should be created
-            - text: The content to write into the new file
+        Requires three parameters:
+        - pathInProject: The relative path where the file should be created
+        - text: The content to write into the new file
+        - projectName: The name of the project to create file in. Use list_projects tool to get available project names.
         Returns one of two possible responses:
-            - "ok" if the file was successfully created and populated
-            - "can't find project dir" if the project directory cannot be determined
+        - "ok" if the file was successfully created and populated
+        - "can't find project dir" if the project directory cannot be determined
         Note: Creates any necessary parent directories automatically
     """
 
-    override fun handle(project: Project, args: CreateNewFileWithTextArgs): Response {
+    override fun handle(args: CreateNewFileWithTextArgs): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "can't find project dir")
 
@@ -227,22 +242,22 @@ class CreateNewFileWithTextTool : AbstractMcpTool<CreateNewFileWithTextArgs>(Cre
 
 
 @Serializable
-data class OpenFileInEditorArgs(val filePath: String)
+data class OpenFileInEditorArgs(val filePath: String, override val projectName: String) : ProjectAware
 
 class OpenFileInEditorTool : AbstractMcpTool<OpenFileInEditorArgs>(OpenFileInEditorArgs.serializer()) {
     override val name: String = "open_file_in_editor"
     override val description: String = """
         Opens the specified file in the JetBrains IDE editor.
-        Requires a filePath parameter containing the path to the file to open.
         Requires two parameters:
-            - filePath: The path of file to open can be absolute or relative to the project root.
-            - text: The content to write into the new file
+        - filePath: The path of file to open (can be absolute or relative to the project root)
+        - projectName: The name of the project containing the file. Use list_projects tool to get available project names.
         Returns one of two possible responses:
-            - "file is opened" if the file was successfully created and populated
-            - "file doesn't exist or can't be opened" otherwise
+        - "file is opened" if the file was successfully opened
+        - "file doesn't exist or can't be opened" otherwise
     """.trimIndent()
 
-    override fun handle(project: Project, args: OpenFileInEditorArgs): Response {
+    override fun handle(args: OpenFileInEditorArgs): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "can't find project dir")
 
@@ -261,18 +276,21 @@ class OpenFileInEditorTool : AbstractMcpTool<OpenFileInEditorArgs>(OpenFileInEdi
 }
 
 
-class GetAllOpenFilePathsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+class GetAllOpenFilePathsTool : AbstractMcpTool<ProjectOnly>(ProjectOnly.serializer()) {
     override val name: String = "get_all_open_file_paths"
     override val description: String = """
         Lists full path relative paths to project root of all currently open files in the JetBrains IDE editor.
         Returns a list of file paths that are currently open in editor tabs.
+        Requires one parameter:
+        - projectName: The name of the project to get open file paths from. Use list_projects tool to get available project names.
         Returns an empty list if no files are open.
-        
+
         Use this tool to explore current open editors.
         Returns a list of file paths separated by newline symbol.
     """.trimIndent()
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: ProjectOnly): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
 
         val fileEditorManager = FileEditorManager.getInstance(project)
@@ -291,7 +309,8 @@ class GetCurrentFilePathTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
         Returns an empty string if no file is currently open.
     """.trimIndent()
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: NoArgs): Response {
+        val project = getLastFocusedOrOpenedProject() ?: return Response(error = "Project not found")
         val path = runReadAction<String?> {
             getInstance(project).selectedTextEditor?.virtualFile?.path
         }

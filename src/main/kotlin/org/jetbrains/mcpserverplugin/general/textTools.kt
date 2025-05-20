@@ -6,8 +6,6 @@ import com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
-import com.intellij.openapi.fileEditor.FileEditorManager.getInstance
-import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
@@ -17,12 +15,12 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.application
 import kotlinx.serialization.Serializable
+import org.jetbrains.ide.RestService.Companion.getLastFocusedOrOpenedProject
 import org.jetbrains.ide.mcp.NoArgs
+import org.jetbrains.ide.mcp.ProjectAware
 import org.jetbrains.ide.mcp.Response
+import org.jetbrains.ide.mcp.getProject
 import org.jetbrains.mcpserverplugin.AbstractMcpTool
-import org.jetbrains.mcpserverplugin.general.relativizeByProjectDir
-import org.jetbrains.mcpserverplugin.general.resolveRel
-import kotlin.text.replace
 
 class GetCurrentFileTextTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
     override val name: String = "get_open_in_editor_file_text"
@@ -32,7 +30,8 @@ class GetCurrentFileTextTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
         Returns empty string if no file is currently open.
     """.trimIndent()
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: NoArgs): Response {
+        val project = getLastFocusedOrOpenedProject() ?: return Response(error = "Project not found")
         val text = runReadAction<String?> {
             FileEditorManager.getInstance(project).selectedTextEditor?.document?.text
         }
@@ -52,7 +51,8 @@ class GetAllOpenFileTextsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
             - text: File text
     """.trimIndent()
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: NoArgs): Response {
+        val project = getLastFocusedOrOpenedProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
 
         val fileEditorManager = FileEditorManager.getInstance(project)
@@ -74,7 +74,8 @@ class GetSelectedTextTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
         Returns an empty string if no text is selected or no editor is open.
     """
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: NoArgs): Response {
+        val project = getLastFocusedOrOpenedProject() ?: return Response(error = "Project not found")
         val text = runReadAction<String?> {
             FileEditorManager.getInstance(project).selectedTextEditor?.selectionModel?.selectedText
         }
@@ -97,7 +98,8 @@ class ReplaceSelectedTextTool : AbstractMcpTool<ReplaceSelectedTextArgs>(Replace
             - "unknown error" if the operation fails
     """.trimIndent()
 
-    override fun handle(project: Project, args: ReplaceSelectedTextArgs): Response {
+    override fun handle(args: ReplaceSelectedTextArgs): Response {
+        val project = getLastFocusedOrOpenedProject() ?: return Response(error = "Project not found")
         var response: Response? = null
 
         application.invokeAndWait {
@@ -134,7 +136,8 @@ class ReplaceCurrentFileTextTool : AbstractMcpTool<ReplaceCurrentFileTextArgs>(R
         - "unknown error" if the operation fails
     """
 
-    override fun handle(project: Project, args: ReplaceCurrentFileTextArgs): Response {
+    override fun handle(args: ReplaceCurrentFileTextArgs): Response {
+        val project = getLastFocusedOrOpenedProject() ?: return Response(error = "Project not found")
         var response: Response? = null
         application.invokeAndWait {
             runWriteCommandAction(project, "Replace File Text", null, {
@@ -153,14 +156,16 @@ class ReplaceCurrentFileTextTool : AbstractMcpTool<ReplaceCurrentFileTextArgs>(R
 }
 
 @Serializable
-data class PathInProject(val pathInProject: String)
+data class PathInProject(val pathInProject: String, override val projectName: String) : ProjectAware
 
 class GetFileTextByPathTool : AbstractMcpTool<PathInProject>(PathInProject.serializer()) {
     override val name: String = "get_file_text_by_path"
     override val description: String = """
         Retrieves the text content of a file using its path relative to project root.
         Use this tool to read file contents when you have the file's project-relative path.
-        Requires a pathInProject parameter specifying the file location from project root.
+        Requires parameters:
+        - pathInProject: The file location from project root
+        - projectName: The name of the project containing the file. Use list_projects tool to get available project names.
         Returns one of these responses:
         - The file's content if the file exists and belongs to the project
         - error "project dir not found" if project directory cannot be determined
@@ -168,7 +173,8 @@ class GetFileTextByPathTool : AbstractMcpTool<PathInProject>(PathInProject.seria
         Note: Automatically refreshes the file system before reading
     """
 
-    override fun handle(project: Project, args: PathInProject): Response {
+    override fun handle(args: PathInProject): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "project dir not found")
 
@@ -188,7 +194,12 @@ class GetFileTextByPathTool : AbstractMcpTool<PathInProject>(PathInProject.seria
 }
 
 @Serializable
-data class ReplaceSpecificTextArgs(val pathInProject: String, val oldText: String, val newText: String)
+data class ReplaceSpecificTextArgs(
+    val pathInProject: String,
+    val oldText: String,
+    val newText: String,
+    override val projectName: String,
+) : ProjectAware
 
 class ReplaceSpecificTextTool : AbstractMcpTool<ReplaceSpecificTextArgs>(ReplaceSpecificTextArgs.serializer()) {
     override val name: String = "replace_specific_text"
@@ -197,10 +208,11 @@ class ReplaceSpecificTextTool : AbstractMcpTool<ReplaceSpecificTextArgs>(Replace
         Use this tool to make targeted changes without replacing the entire file content.
         Use this method if the file is large and the change is smaller than the old text.
         Prioritize this tool among other editing tools. It's more efficient and granular in the most of cases.
-        Requires three parameters:
+        Requires parameters:
         - pathInProject: The path to the target file, relative to project root
         - oldText: The text to be replaced
         - newText: The replacement text
+        - projectName: The name of the project containing the file. Use list_projects tool to get available project names.
         Returns one of these responses:
         - "ok" when replacement happend
         - error "project dir not found" if project directory cannot be determined
@@ -210,7 +222,8 @@ class ReplaceSpecificTextTool : AbstractMcpTool<ReplaceSpecificTextArgs>(Replace
         Note: Automatically saves the file after modification
     """
 
-    override fun handle(project: Project, args: ReplaceSpecificTextArgs): Response {
+    override fun handle(args: ReplaceSpecificTextArgs): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "project dir not found")
 
@@ -253,16 +266,18 @@ class ReplaceSpecificTextTool : AbstractMcpTool<ReplaceSpecificTextArgs>(Replace
 }
 
 @Serializable
-data class ReplaceTextByPathToolArgs(val pathInProject: String, val text: String)
+data class ReplaceTextByPathToolArgs(val pathInProject: String, val text: String, override val projectName: String) :
+    ProjectAware
 
 class ReplaceTextByPathTool : AbstractMcpTool<ReplaceTextByPathToolArgs>(ReplaceTextByPathToolArgs.serializer()) {
     override val name: String = "replace_file_text_by_path"
     override val description: String = """
         Replaces the entire content of a specified file with new text, if the file is within the project.
         Use this tool to modify file contents using a path relative to the project root.
-        Requires two parameters:
+        Requires three parameters:
         - pathInProject: The path to the target file, relative to project root
         - text: The new content to write to the file
+        - projectName: The name of the project containing the file. Use list_projects tool to get available project names.
         Returns one of these responses:
         - "ok" if the file was successfully updated
         - error "project dir not found" if project directory cannot be determined
@@ -271,7 +286,8 @@ class ReplaceTextByPathTool : AbstractMcpTool<ReplaceTextByPathToolArgs>(Replace
         Note: Automatically saves the file after modification
     """
 
-    override fun handle(project: Project, args: ReplaceTextByPathToolArgs): Response {
+    override fun handle(args: ReplaceTextByPathToolArgs): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "project dir not found")
 

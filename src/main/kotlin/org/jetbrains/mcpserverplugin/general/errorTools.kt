@@ -15,18 +15,21 @@ import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.toNioPathOrNull
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
-import org.jetbrains.ide.mcp.NoArgs
+import org.jetbrains.ide.mcp.ProjectOnly
 import org.jetbrains.ide.mcp.Response
+import org.jetbrains.ide.mcp.getProject
 import org.jetbrains.mcpserverplugin.AbstractMcpTool
 import org.jetbrains.mcpserverplugin.JsonUtils
 import java.nio.file.Path
 
 
-class GetCurrentFileErrorsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+class GetCurrentFileErrorsTool : AbstractMcpTool<ProjectOnly>(ProjectOnly.serializer()) {
     override val name: String = "get_current_file_errors"
     override val description: String = """
         Analyzes the currently open file in the editor for errors and warnings using IntelliJ's inspections.
         Use this tool to identify coding issues, syntax errors, and other problems in your current file.
+        Requires parameter:
+        - projectName: The name of the project to analyze. Use list_projects tool to get available project names.
         Returns a JSON array of objects containing error information:
         - severity: The severity level of the issue (ERROR, WARNING, etc.)
         - description: A description of the issue
@@ -35,7 +38,8 @@ class GetCurrentFileErrorsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
         Returns error if no file is currently open.
     """.trimIndent()
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: ProjectOnly): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         return runReadAction {
             try {
                 val fileEditorManager = FileEditorManager.getInstance(project)
@@ -86,25 +90,27 @@ class GetCurrentFileErrorsTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
     }
 }
 
-class GetProblemsTools : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
+class GetProblemsTools : AbstractMcpTool<ProjectOnly>(ProjectOnly.serializer()) {
     override val name: String = "get_project_problems"
     override val description: String = """
         Retrieves all project problems (errors, warnings, etc.) detected in the project by IntelliJ's inspections.
         Use this tool to get a comprehensive list of global project issues (compilation errors, inspections problems, etc.).
-        Does not require any parameters.
-        
-        Use another tool get_current_file_errors to get errors in the opened file. 
-        
+        Requires parameter:
+        - projectName: The name of the project to analyze. Use list_projects tool to get available project names.
+
+        Use another tool get_current_file_errors to get errors in the opened file.
+
         Returns a JSON array of objects containing problem information:
         - group: The group or category of the problem
         - description: The location and description of the problem
-        - problemText: The short text of the problem 
-        
+        - problemText: The short text of the problem
+
         Returns an empty array ([]) if no problems are found.
         Returns error "project dir not found" if the project directory cannot be determined.
     """.trimIndent()
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: ProjectOnly): Response {
+        val project = args.getProject() ?: return Response(error = "Project not found")
         val projectDir = project.guessProjectDir()?.toNioPathOrNull()
             ?: return Response(error = "project dir not found")
 

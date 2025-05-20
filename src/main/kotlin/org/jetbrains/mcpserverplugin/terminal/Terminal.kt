@@ -1,11 +1,11 @@
 package org.jetbrains.mcpserverplugin.terminal
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.dsl.builder.panel
 import com.jediterm.terminal.TtyConnector
 import kotlinx.serialization.Serializable
+import org.jetbrains.ide.RestService.Companion.getLastFocusedOrOpenedProject
 import org.jetbrains.ide.mcp.NoArgs
 import org.jetbrains.ide.mcp.Response
 import org.jetbrains.mcpserverplugin.AbstractMcpTool
@@ -32,7 +32,8 @@ class GetTerminalTextTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
         Note: Only captures text from the first terminal if multiple terminals are open
     """
 
-    override fun handle(project: Project, args: NoArgs): Response {
+    override fun handle(args: NoArgs): Response {
+        val project = getLastFocusedOrOpenedProject() ?: return Response(error = "Project not found")
         val text = com.intellij.openapi.application.runReadAction<String?> {
             TerminalView.getInstance(project).getWidgets().firstOrNull()?.text
         }
@@ -79,7 +80,8 @@ class ExecuteTerminalCommandTool : AbstractMcpTool<ExecuteTerminalCommandArgs>(E
         }
     }
 
-    override fun handle(project: Project, args: ExecuteTerminalCommandArgs): Response {
+    override fun handle(args: ExecuteTerminalCommandArgs): Response {
+        val project = getLastFocusedOrOpenedProject() ?: return Response(error = "Project not found")
         val future = CompletableFuture<Response>()
 
         ApplicationManager.getApplication().invokeAndWait {
