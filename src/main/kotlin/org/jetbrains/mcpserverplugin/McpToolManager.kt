@@ -29,6 +29,7 @@ import org.jetbrains.mcpserverplugin.general.SearchInFilesContentTool
 import org.jetbrains.mcpserverplugin.general.WaitTool
 import org.jetbrains.mcpserverplugin.git.GetVcsStatusTool
 import org.jetbrains.mcpserverplugin.general.ReformatCurrentFileTool
+import org.jetbrains.mcpserverplugin.general.OptimizeImportsTool
 import org.jetbrains.mcpserverplugin.general.ReformatFileTool
 
 class McpToolManager {
@@ -75,6 +76,7 @@ class McpToolManager {
             GetCurrentFileErrorsTool(),
             ReformatCurrentFileTool(),
             ReformatFileTool(),
+            OptimizeImportsTool(),
             GetProblemsTools(),
         )
     }
