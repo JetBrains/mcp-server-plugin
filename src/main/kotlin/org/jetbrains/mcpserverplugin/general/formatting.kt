@@ -1,5 +1,6 @@
 package org.jetbrains.mcpserverplugin.general
 
+import com.intellij.codeInsight.actions.OptimizeImportsProcessor
 import com.intellij.codeInsight.actions.ReformatCodeProcessor
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.runReadAction
@@ -21,7 +22,7 @@ class ReformatCurrentFileTool : AbstractMcpTool<NoArgs>(NoArgs.serializer()) {
     override val description: String = """
         Reformats the opened file in the JetBrains IDE editor.
         This tool doesn't require any parameters as it operates on the file currently open in the editor.
-        
+
         Returns one of two possible responses:
             - "ok" if the file was successfully reformatted
             - "file doesn't exist or can't be opened" if there is no file currently selected in the editor
@@ -54,7 +55,7 @@ class ReformatFileTool : AbstractMcpTool<PathInProject>(PathInProject.serializer
         Reformats a specified file in the JetBrains IDE.
         Use this tool to apply code formatting rules to a file identified by its path.
         Requires a pathInProject parameter specifying the file location relative to the project root.
-        
+
         Returns one of these responses:
         - "ok" if the file was successfully reformatted
         - error "project dir not found" if project directory cannot be determined
@@ -85,6 +86,48 @@ class ReformatFileTool : AbstractMcpTool<PathInProject>(PathInProject.serializer
             latch.countDown()
         })
         ApplicationManager.getApplication().invokeLater(Runnable { codeProcessor.run() })
+        latch.await()
+        return Response("ok")
+    }
+}
+
+class OptimizeImportsTool : AbstractMcpTool<PathInProject>(PathInProject.serializer()) {
+    override val name: String = "optimize_imports"
+    override val description: String = """
+        Optimizes imports in a specified file in the JetBrains IDE.
+        Removes unused imports and reorders remaining imports according to project code style settings.
+        Requires a pathInProject parameter specifying the file location relative to the project root.
+
+        Returns one of these responses:
+        - "ok" if the imports were successfully optimized
+        - error "project dir not found" if project directory cannot be determined
+        - error "file doesn't exist or can't be opened" if the file doesn't exist or cannot be accessed
+    """.trimIndent()
+
+    override fun handle(project: Project, args: PathInProject): Response {
+        val latch = CountDownLatch(1)
+
+        val projectDir = project.guessProjectDir()?.toNioPathOrNull()
+            ?: return Response(error = "project dir not found")
+
+        val file = runReadAction {
+            LocalFileSystem.getInstance()
+                .refreshAndFindFileByNioFile(projectDir.resolveRel(args.pathInProject))
+        }
+
+        if (file == null) {return Response(error = "file doesn't exist or can't be opened")}
+
+        val psiFile = runReadAction {
+            return@runReadAction PsiManager.getInstance(project).findFile(file)
+        }
+
+        if (psiFile == null) {return Response(error = "file doesn't exist or can't be opened")}
+
+        val processor = OptimizeImportsProcessor(project, psiFile)
+        processor.setPostRunnable(Runnable {
+            latch.countDown()
+        })
+        ApplicationManager.getApplication().invokeLater(Runnable { processor.run() })
         latch.await()
         return Response("ok")
     }
